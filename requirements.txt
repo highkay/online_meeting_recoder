@@ -1,0 +1,5 @@
+openai
+sounddevice
+sherpa_onnx
+# sherpa-onnx will be installed as per its documentation, often involving pre-built binaries or specific build steps.
+# We will add other specific GUI or utility libraries as needed.
