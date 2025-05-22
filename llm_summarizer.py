@@ -7,26 +7,42 @@ class LLMSummarizer:
         self.api_key = api_key
         self.model_name = model_name
         self.base_url = base_url
+        self.client = None # ADDED
+
+        if self.api_key: # MODIFIED BLOCK - Only init client if api_key is truthy
+            self.client = openai.OpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url # base_url can be None here
+            )
+    
+    def update_config(self, api_key_new=None, model_name_new=None, base_url_new=None): # ENTIRELY REPLACED METHOD
+        client_needs_reinit = False
+        if api_key_new: # Only update if api_key_new is truthy
+            if self.api_key != api_key_new:
+                self.api_key = api_key_new
+                client_needs_reinit = True
         
-        if self.api_key:
-            openai.api_key = self.api_key
-        if self.base_url:
-            openai.api_base = self.base_url
+        if model_name_new: # Only update if model_name_new is truthy
+            if self.model_name != model_name_new:
+                self.model_name = model_name_new
+                # Model name change does not require client re-initialization by itself
 
-    def update_config(self, api_key=None, model_name=None, base_url=None):
-        if api_key:
-            self.api_key = api_key
-            openai.api_key = self.api_key
-        if model_name:
-            self.model_name = model_name
-        if base_url:
-            self.base_url = base_url
-            openai.api_base = self.base_url
-        # If only base_url is updated, api_key might need to be re-set if it was None before
-        elif self.api_key and not openai.api_key: 
-             openai.api_key = self.api_key
+        if base_url_new: # Only update if base_url_new is truthy
+            if self.base_url != base_url_new:
+                self.base_url = base_url_new
+                client_needs_reinit = True
+        
+        # Re-initialize client if key/base_url changed, or if api_key is set but client is not yet initialized
+        if client_needs_reinit or (self.api_key and not self.client):
+            if self.api_key: # Ensure api_key is truthy before creating client
+                self.client = openai.OpenAI(
+                    api_key=self.api_key,
+                    base_url=self.base_url
+                )
+            else: # If api_key became non-truthy (e.g. empty string after an update)
+                self.client = None
 
-    def summarize(self, transcript_text):
+    def summarize(self, transcript_text): # MODIFIED SIGNIFICANTLY
         """
         Generates a Markdown-formatted meeting summary from the transcript text.
 
@@ -36,16 +52,31 @@ class LLMSummarizer:
         Returns:
             str: Markdown formatted meeting summary, or None if summarization fails.
         """
-        if not self.api_key:
-            print("Error: OpenAI API key not configured.")
-            # Try to get from environment variable as a fallback
+        # Ensure client is initialized, attempting to use env vars if not set
+        if not self.client and not self.api_key: 
             env_api_key = os.getenv("OPENAI_API_KEY")
             if env_api_key:
-                print("Found API key in OPENAI_API_KEY environment variable.")
-                self.api_key = env_api_key
-                openai.api_key = self.api_key
+                args_for_update = {'api_key_new': env_api_key}
+                env_base_url = os.getenv("OPENAI_BASE_URL") # Check for base_url from env
+                if env_base_url:
+                    args_for_update['base_url_new'] = env_base_url
+                self.update_config(**args_for_update) # This sets attributes and initializes client if api_key is truthy
             else:
-                return "Error: API Key not provided. Please configure it in settings."
+                print("Error: OpenAI API key not configured and not found in OPENAI_API_KEY environment variable.")
+                return "Error: API Key not provided. Please configure it in settings or via OPENAI_API_KEY."
+        elif not self.client and self.api_key: # API key is set (truthy), but client is somehow not initialized
+            # This could happen if __init__ had a truthy api_key but client init failed, or subsequent update_config made api_key non-truthy then truthy again.
+            # Or if api_key was empty string initially.
+            # Ensure client is created if api_key is now truthy.
+            if self.api_key: # Double check api_key is truthy
+                 self.client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url)
+            else: # api_key is set but not truthy (e.g. empty string)
+                print("Error: OpenAI API key is non-truthy. Client not initialized.")
+                return "Error: API Key is invalid (e.g. empty string). Client not initialized."
+
+        if not self.client: # Final check, if client is still None, something is wrong with API key or config
+            print("Error: OpenAI client could not be initialized. Check API key and configuration.")
+            return "Error: OpenAI client not initialized. Please check API key and configuration."
         
         if not transcript_text or transcript_text.isspace():
             print("Error: Transcript text is empty.")
@@ -71,22 +102,22 @@ class LLMSummarizer:
         """
 
         try:
-            print(f"Sending request to LLM. Model: {self.model_name}, Base URL: {openai.api_base or 'Default OpenAI'}")
-            response = openai.ChatCompletion.create(
+            print(f"Sending request to LLM. Model: {self.model_name}, Base URL: {self.base_url or 'Default OpenAI'}")
+            response = self.client.chat.completions.create( # MODIFIED API call
                 model=self.model_name,
                 messages=[
                     {"role": "system", "content": "你是一个专业的会议纪要助手，擅长将会议记录整理成结构化的Markdown文档。"},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.5, # Adjust for creativity vs. factuality
+                temperature=0.5, 
             )
-            summary = response.choices[0].message['content'].strip()
+            summary = response.choices[0].message.content.strip() # MODIFIED attribute access
             print("Summary generated successfully.")
             return summary
-        except openai.error.AuthenticationError as e:
+        except openai.AuthenticationError as e:
             print(f"OpenAI API Authentication Error: {e}")
             return f"Error: OpenAI API Authentication Failed. Please check your API key. Details: {e}"
-        except openai.error.OpenAIError as e:
+        except openai.OpenAIError as e:
             print(f"OpenAI API Error: {e}")
             return f"Error: OpenAI API request failed. Details: {e}"
         except Exception as e:

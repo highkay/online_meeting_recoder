@@ -27,11 +27,21 @@ class MeetingRecorderApp:
         
         # Initialize Transcriber and LLMSummarizer with settings
         # These will be re-initialized or updated if settings change
-        self.transcriber = Transcriber(
-            sense_voice_model_dir=self.settings_manager.get_sherpa_onnx_model_dir()
-            # 使用 settings_manager 中的 sherpa_onnx_model_dir 设置作为 sense_voice_model_dir 参数
-            # 其他参数使用 Transcriber 类中的默认值
-        )
+        model_dir = self.settings_manager.get_sherpa_onnx_model_dir()
+        # Ensure model_dir is not None and is a valid path string
+        if not model_dir: # Basic check, ideally settings_manager ensures a valid default
+            print("Warning: Sherpa-ONNX model directory not configured in settings. Using default transcriber paths.")
+            # If model_dir is not set, Transcriber will use its own default paths for model and tokens
+            self.transcriber = Transcriber()
+        else:
+            effective_model_path = os.path.join(model_dir, "model.onnx")
+            effective_tokens_path = os.path.join(model_dir, "tokens.txt")
+            self.transcriber = Transcriber(
+                model_path=effective_model_path,
+                tokens_path=effective_tokens_path
+                # Other parameters (num_threads, debug, use_itn, hr_paths) 
+                # will use defaults from Transcriber.__init__ method in transcriber.py
+            )
         self.llm_summarizer = LLMSummarizer(
             api_key=self.settings_manager.get_openai_api_key(),
             model_name=self.settings_manager.get_openai_model_name(),
@@ -75,23 +85,24 @@ class MeetingRecorderApp:
         self.history_tree.configure(yscroll=scrollbar.set)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Action buttons for history items
-        history_actions_frame = ttk.Frame(history_frame)
-        history_actions_frame.pack(fill=tk.X, pady=5)
+        # REMOVE Action buttons for history items
+        # history_actions_frame = ttk.Frame(history_frame)
+        # history_actions_frame.pack(fill=tk.X, pady=5)
 
-        self.preview_button = ttk.Button(history_actions_frame, text="预览纪要", command=self.preview_summary, state=tk.DISABLED)
-        self.preview_button.pack(side=tk.LEFT, padx=5)
-        self.export_button = ttk.Button(history_actions_frame, text="导出纪要", command=self.export_summary, state=tk.DISABLED)
-        self.export_button.pack(side=tk.LEFT, padx=5)
-        self.download_wav_button = ttk.Button(history_actions_frame, text="下载WAV", command=self.download_wav, state=tk.DISABLED)
-        self.download_wav_button.pack(side=tk.LEFT, padx=5)
-        self.download_txt_button = ttk.Button(history_actions_frame, text="下载文本", command=self.download_transcript, state=tk.DISABLED)
-        self.download_txt_button.pack(side=tk.LEFT, padx=5)
+        # self.preview_button = ttk.Button(history_actions_frame, text="预览纪要", command=self.preview_summary, state=tk.DISABLED)
+        # self.preview_button.pack(side=tk.LEFT, padx=5)
+        # self.export_button = ttk.Button(history_actions_frame, text="导出纪要", command=self.export_summary, state=tk.DISABLED)
+        # self.export_button.pack(side=tk.LEFT, padx=5)
+        # self.download_wav_button = ttk.Button(history_actions_frame, text="下载WAV", command=self.download_wav, state=tk.DISABLED)
+        # self.download_wav_button.pack(side=tk.LEFT, padx=5)
+        # self.download_txt_button = ttk.Button(history_actions_frame, text="下载文本", command=self.download_transcript, state=tk.DISABLED)
+        # self.download_txt_button.pack(side=tk.LEFT, padx=5)
 
-        self.delete_history_item_button = ttk.Button(history_actions_frame, text="删除记录", command=self.delete_selected_history_item, state=tk.DISABLED)
-        self.delete_history_item_button.pack(side=tk.LEFT, padx=5)
+        # self.delete_history_item_button = ttk.Button(history_actions_frame, text="删除记录", command=self.delete_selected_history_item, state=tk.DISABLED)
+        # self.delete_history_item_button.pack(side=tk.LEFT, padx=5)
 
         self.history_tree.bind("<<TreeviewSelect>>", self.on_history_select)
+        self.history_tree.bind("<Button-3>", self.show_history_context_menu) # Bind right-click
 
         # Create necessary directories if they don't exist
         self.create_directories()
@@ -140,13 +151,9 @@ class MeetingRecorderApp:
         print(f"录音文件已保存: {self.current_wav_path}")
 
         # 2. Transcribe
-        # Ensure transcriber has latest model settings (in case they changed)
-        self.transcriber.sense_voice_model_dir = self.settings_manager.get_sherpa_onnx_model_dir()
-        self.transcriber.tokens_file = os.path.join(self.transcriber.sense_voice_model_dir, "tokens.txt")
-        self.transcriber.encoder_model = os.path.join(self.transcriber.sense_voice_model_dir, "encoder.onnx")
-        self.transcriber.decoder_model = os.path.join(self.transcriber.sense_voice_model_dir, "decoder.onnx")
-        self.transcriber.joiner_model = os.path.join(self.transcriber.sense_voice_model_dir, "joiner.onnx")
-        
+        # The self.transcriber instance should be up-to-date if settings were changed via SettingsWindow,
+        # as SettingsWindow is expected to re-initialize app.transcriber.
+        # Thus, direct modifications to transcriber attributes here are removed.
         transcript_text = self.transcriber.transcribe(self.current_wav_path)
         if transcript_text is None or transcript_text.startswith("Error:"):
             messagebox.showerror("转录失败", f"无法转录音频文件: {transcript_text or '未知错误'}", parent=self.root)
@@ -173,9 +180,9 @@ class MeetingRecorderApp:
         # 3. Summarize
         # Ensure summarizer has latest API config
         self.llm_summarizer.update_config(
-            api_key=self.settings_manager.get_openai_api_key(),
-            model_name=self.settings_manager.get_openai_model_name(),
-            base_url=self.settings_manager.get_openai_base_url()
+            api_key_new=self.settings_manager.get_openai_api_key(),
+            model_name_new=self.settings_manager.get_openai_model_name(),
+            base_url_new=self.settings_manager.get_openai_base_url()
         )
         summary_md = self.llm_summarizer.summarize(transcript_text)
         if summary_md is None or summary_md.startswith("Error:"):
@@ -245,38 +252,53 @@ class MeetingRecorderApp:
 
     def on_history_select(self, event):
         selected_item = self.history_tree.focus()
-        if selected_item:
-            self.preview_button.config(state=tk.NORMAL)
-            self.export_button.config(state=tk.NORMAL)
-            self.download_wav_button.config(state=tk.NORMAL)
-            self.download_txt_button.config(state=tk.NORMAL)
-            self.delete_history_item_button.config(state=tk.NORMAL)
+        # The button enabling/disabling logic is now handled by the context menu creation
+        # So, this function might become simpler or be removed if not used elsewhere.
+        # For now, let's keep it to ensure selection still works for other potential purposes.
+        # If no other purpose, we can remove the button state changes from here.
+        pass # Button states are now managed by the context menu
 
-            # Enable preview/export only if summary/transcript files exist for the selected item
-            record_id = self.history_tree.focus()
-            record = self.history_manager.get_record_by_id(record_id)
-            if record:
-                if record.get("summary_filename"):
-                    self.preview_button.config(state=tk.NORMAL)
-                    self.export_button.config(state=tk.NORMAL)
-                else:
-                    self.preview_button.config(state=tk.DISABLED)
-                    self.export_button.config(state=tk.DISABLED)
-                
-                if not record.get("wav_filename"):
-                    self.download_wav_button.config(state=tk.DISABLED)
-                if not record.get("transcript_filename"):
-                    self.download_txt_button.config(state=tk.DISABLED)
-            else: # Should not happen if item is selected
-                self.preview_button.config(state=tk.DISABLED)
-                self.export_button.config(state=tk.DISABLED)
+    def show_history_context_menu(self, event):
+        """Shows a context menu for the selected history item."""
+        # Select item under mouse pointer
+        iid = self.history_tree.identify_row(event.y)
+        if not iid:
+            return # No item under pointer
 
+        self.history_tree.selection_set(iid) # Select the item
+        self.history_tree.focus(iid) # Focus on the item
+
+        record_id = iid
+        record = self.history_manager.get_record_by_id(record_id)
+        if not record:
+            return # Should not happen if item is selected
+
+        context_menu = tk.Menu(self.root, tearoff=0)
+
+        if record.get("summary_filename"):
+            context_menu.add_command(label="预览纪要", command=self.preview_summary)
+            context_menu.add_command(label="导出纪要", command=self.export_summary)
         else:
-            self.preview_button.config(state=tk.DISABLED)
-            self.export_button.config(state=tk.DISABLED)
-            self.download_wav_button.config(state=tk.DISABLED)
-            self.download_txt_button.config(state=tk.DISABLED)
-            self.delete_history_item_button.config(state=tk.DISABLED)
+            context_menu.add_command(label="预览纪要", state=tk.DISABLED)
+            context_menu.add_command(label="导出纪要", state=tk.DISABLED)
+
+        if record.get("wav_filename"):
+            context_menu.add_command(label="下载WAV", command=self.download_wav)
+        else:
+            context_menu.add_command(label="下载WAV", state=tk.DISABLED)
+
+        if record.get("transcript_filename"):
+            context_menu.add_command(label="下载文本", command=self.download_transcript)
+        else:
+            context_menu.add_command(label="下载文本", state=tk.DISABLED)
+        
+        context_menu.add_separator()
+        context_menu.add_command(label="删除记录", command=self.delete_selected_history_item)
+
+        try:
+            context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            context_menu.grab_release()
 
     def preview_summary(self):
         selected_item = self.history_tree.focus()

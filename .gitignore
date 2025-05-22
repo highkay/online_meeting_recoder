@@ -42,6 +42,11 @@ summaries/*.md
 # 第三方模型包临时文件
 sherpa-onnx-*/temp_*
 
+dict/
+
 config.json
+history_metadata.json
+lexicon.txt
+replace.fst
 
 sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
