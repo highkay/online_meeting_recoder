@@ -48,5 +48,6 @@ config.json
 history_metadata.json
 lexicon.txt
 replace.fst
+*.onnx
 
 sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17

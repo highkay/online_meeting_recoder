@@ -15,9 +15,10 @@ class MeetingRecorderApp:
     def __init__(self, root):
         self.root = root
         self.root.title("在线会议记录器")
-        self.root.geometry("800x600")
+        self.root.geometry("800x650") # Increased height for progress bar
 
         self.is_recording = False
+        self.is_processing = False # Flag to indicate processing state
         self.current_wav_path = None
 
         # Initialize managers
@@ -54,13 +55,19 @@ class MeetingRecorderApp:
 
         # Controls frame
         controls_frame = ttk.Frame(main_frame)
-        controls_frame.pack(pady=10, fill=tk.X)
+        controls_frame.pack(pady=5, fill=tk.X) # Reduced pady for progress bar
 
         self.record_button = ttk.Button(controls_frame, text="开始录音", command=self.toggle_recording)
         self.record_button.pack(side=tk.LEFT, padx=5)
 
         self.settings_button = ttk.Button(controls_frame, text="设置", command=self.open_settings)
         self.settings_button.pack(side=tk.RIGHT, padx=5)
+
+        # Progress bar frame
+        progress_frame = ttk.Frame(main_frame)
+        progress_frame.pack(pady=5, fill=tk.X)
+        self.progress_bar = ttk.Progressbar(progress_frame, mode='indeterminate')
+        # self.progress_bar.pack(fill=tk.X, padx=5, pady=5) # Initially hidden
 
         # History frame
         history_frame = ttk.LabelFrame(main_frame, text="历史会议记录", padding="10")
@@ -115,99 +122,127 @@ class MeetingRecorderApp:
                 os.makedirs(dirname)
 
     def toggle_recording(self):
+        if self.is_processing: # Don't allow recording if processing
+            messagebox.showwarning("处理中", "正在处理上一个会议记录，请稍候。", parent=self.root)
+            return
         if self.is_recording:
             self.stop_recording()
         else:
             self.start_recording()
 
     def start_recording(self):
+        if self.is_processing: # Double check, should be caught by toggle_recording
+            return
         self.is_recording = True
-        self.record_button.config(text="停止录音")
+        self.record_button.config(text="停止录音", state=tk.NORMAL) # Ensure button is normal
+        self.progress_bar.pack_forget() # Ensure progress bar is hidden
         self.current_wav_path = None # Reset path for new recording
         
         # Update audio_recorder filenames based on a timestamp to ensure uniqueness for temp files
         # The final merged file will also get a unique name from audio_recorder.stop()
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.audio_recorder.output_filename = os.path.join("recordings", f"temp_output_{timestamp}.wav")
+        # self.audio_recorder.output_filename = os.path.join("recordings", f"temp_output_{timestamp}.wav")
         self.audio_recorder.input_filename = os.path.join("recordings", f"temp_input_{timestamp}.wav")
         
         self.audio_recorder.start()
-        messagebox.showinfo("录音开始", "正在录制音频...", parent=self.root)
+        # messagebox.showinfo("录音开始", "正在录制音频...", parent=self.root) # Removed
 
     def stop_recording(self):
         if not self.is_recording:
             return
 
         self.is_recording = False
-        self.record_button.config(text="开始录音")
-        messagebox.showinfo("录音停止", "录音已停止，正在处理文件...", parent=self.root)
+        self.is_processing = True # Set processing flag
+        self.record_button.config(text="处理中...", state=tk.DISABLED)
+        self.progress_bar.pack(fill=tk.X, padx=5, pady=5) # Show progress bar
+        self.progress_bar.start()
+        self.root.update_idletasks() # Ensure UI updates immediately
 
-        self.current_wav_path = self.audio_recorder.stop()
-
-        if not self.current_wav_path or not os.path.exists(self.current_wav_path):
-            messagebox.showerror("录音失败", "未能保存录音文件。", parent=self.root)
-            return
-
-        print(f"录音文件已保存: {self.current_wav_path}")
-
-        # 2. Transcribe
-        # The self.transcriber instance should be up-to-date if settings were changed via SettingsWindow,
-        # as SettingsWindow is expected to re-initialize app.transcriber.
-        # Thus, direct modifications to transcriber attributes here are removed.
-        transcript_text = self.transcriber.transcribe(self.current_wav_path)
-        if transcript_text is None or transcript_text.startswith("Error:"):
-            messagebox.showerror("转录失败", f"无法转录音频文件: {transcript_text or '未知错误'}", parent=self.root)
-            # Save record with only WAV if transcription fails
-            base_wav_name = os.path.basename(self.current_wav_path)
-            self.history_manager.add_meeting_record(base_wav_name, "", "")
-            self.load_history_display()
-            return
-        
-        transcript_filename_base = os.path.splitext(os.path.basename(self.current_wav_path))[0] + ".txt"
-        transcript_filepath = os.path.join(self.history_manager.transcripts_path, transcript_filename_base)
         try:
-            with open(transcript_filepath, 'w', encoding='utf-8') as f:
-                f.write(transcript_text)
-            print(f"转录文本已保存: {transcript_filepath}")
-        except Exception as e:
-            messagebox.showerror("保存失败", f"无法保存转录文本: {e}", parent=self.root)
-            # Save record with only WAV if transcript saving fails
-            base_wav_name = os.path.basename(self.current_wav_path)
-            self.history_manager.add_meeting_record(base_wav_name, "", "")
-            self.load_history_display()
-            return
+            self.current_wav_path = self.audio_recorder.stop()
 
-        # 3. Summarize
-        # Ensure summarizer has latest API config
-        self.llm_summarizer.update_config(
-            api_key_new=self.settings_manager.get_openai_api_key(),
-            model_name_new=self.settings_manager.get_openai_model_name(),
-            base_url_new=self.settings_manager.get_openai_base_url()
-        )
-        summary_md = self.llm_summarizer.summarize(transcript_text)
-        if summary_md is None or summary_md.startswith("Error:"):
-            messagebox.showwarning("纪要生成失败", f"无法生成会议纪要: {summary_md or '未知错误'}. 将仅保存录音和转录文本。", parent=self.root)
-            summary_filename_base = ""
-            summary_filepath = ""
-        else:
-            summary_filename_base = os.path.splitext(os.path.basename(self.current_wav_path))[0] + ".md"
-            summary_filepath = os.path.join(self.history_manager.summaries_path, summary_filename_base)
+            if not self.current_wav_path or not os.path.exists(self.current_wav_path):
+                messagebox.showerror("录音失败", "未能保存录音文件。", parent=self.root)
+                self._finalize_processing(success=False)
+                return
+
+            print(f"录音文件已保存: {self.current_wav_path}")
+
+            # 2. Transcribe
+            transcript_text = self.transcriber.transcribe(self.current_wav_path)
+            if transcript_text is None or transcript_text.startswith("Error:"):
+                messagebox.showerror("转录失败", f"无法转录音频文件: {transcript_text or '未知错误'}", parent=self.root)
+                base_wav_name = os.path.basename(self.current_wav_path)
+                self.history_manager.add_meeting_record(base_wav_name, "", "")
+                self.load_history_display()
+                self._finalize_processing(success=False)
+                return
+            
+            transcript_filename_base = os.path.splitext(os.path.basename(self.current_wav_path))[0] + ".txt"
+            transcript_filepath = os.path.join(self.history_manager.transcripts_path, transcript_filename_base)
             try:
-                with open(summary_filepath, 'w', encoding='utf-8') as f:
-                    f.write(summary_md)
-                print(f"会议纪要已保存: {summary_filepath}")
+                with open(transcript_filepath, 'w', encoding='utf-8') as f:
+                    f.write(transcript_text)
+                print(f"转录文本已保存: {transcript_filepath}")
             except Exception as e:
-                messagebox.showerror("保存失败", f"无法保存会议纪要: {e}", parent=self.root)
-                summary_filename_base = "" # Don't record summary if saving failed
-        
-        # 4. Add to history
-        self.history_manager.add_meeting_record(
-            os.path.basename(self.current_wav_path),
-            transcript_filename_base,
-            summary_filename_base
-        )
-        self.load_history_display()
-        messagebox.showinfo("处理完成", "录音、转录及纪要（如果成功）已保存。", parent=self.root)
+                messagebox.showerror("保存失败", f"无法保存转录文本: {e}", parent=self.root)
+                base_wav_name = os.path.basename(self.current_wav_path)
+                self.history_manager.add_meeting_record(base_wav_name, "", "")
+                self.load_history_display()
+                self._finalize_processing(success=False)
+                return
+
+            # 3. Summarize
+            meeting_date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            meeting_duration_str = "未知"
+            if self.current_wav_path and os.path.exists(self.current_wav_path):
+                try:
+                    import soundfile as sf
+                    f = sf.SoundFile(self.current_wav_path)
+                    duration_seconds = len(f) / f.samplerate
+                    meeting_duration_str = str(datetime.timedelta(seconds=int(duration_seconds)))
+                except Exception as e:
+                    print(f"Error calculating audio duration: {e}")
+
+            self.llm_summarizer.update_config(
+                api_key_new=self.settings_manager.get_openai_api_key(),
+                model_name_new=self.settings_manager.get_openai_model_name(),
+                base_url_new=self.settings_manager.get_openai_base_url()
+            )
+            summary_md = self.llm_summarizer.summarize(transcript_text, meeting_date=meeting_date_str, meeting_duration=meeting_duration_str)
+            summary_filename_base = ""
+            if summary_md is None or summary_md.startswith("Error:"):
+                messagebox.showwarning("纪要生成失败", f"无法生成会议纪要: {summary_md or '未知错误'}. 将仅保存录音和转录文本。", parent=self.root)
+            else:
+                summary_filename_base = os.path.splitext(os.path.basename(self.current_wav_path))[0] + ".md"
+                summary_filepath = os.path.join(self.history_manager.summaries_path, summary_filename_base)
+                try:
+                    with open(summary_filepath, 'w', encoding='utf-8') as f:
+                        f.write(summary_md)
+                    print(f"会议纪要已保存: {summary_filepath}")
+                except Exception as e:
+                    messagebox.showerror("保存失败", f"无法保存会议纪要: {e}", parent=self.root)
+                    summary_filename_base = "" # Clear if saving failed
+
+            # 4. Add to history
+            base_wav_name = os.path.basename(self.current_wav_path)
+            self.history_manager.add_meeting_record(base_wav_name, transcript_filename_base, summary_filename_base)
+            self.load_history_display()
+            self._finalize_processing(success=True)
+
+        except Exception as e:
+            messagebox.showerror("处理错误", f"处理录音时发生意外错误: {e}", parent=self.root)
+            self._finalize_processing(success=False)
+
+    def _finalize_processing(self, success: bool):
+        """Helper function to reset UI elements after processing is done or failed."""
+        self.is_processing = False
+        self.progress_bar.stop()
+        self.progress_bar.pack_forget()
+        self.record_button.config(text="开始录音", state=tk.NORMAL)
+        if success:
+            messagebox.showinfo("处理完成", "会议记录已处理并保存。", parent=self.root)
+        # No specific message for failure here, as individual steps show errors
 
     def open_settings(self):
         SettingsWindow(self.root, self, self.settings_manager, self.llm_summarizer, self.transcriber)
@@ -238,9 +273,7 @@ class MeetingRecorderApp:
         # We need to adjust this to match the values being inserted or adjust insertion.
         # Let's adjust Treeview setup to: ("datetime", "wav", "transcript", "summary")
         # This change needs to be done where history_tree is defined.
-        # For now, this will work but the column headers might be misleading.
-        # Will fix Treeview columns in a subsequent step if needed, or adjust here.
-        # The current values are (display_name, wav_filename, transcript_filename, summary_filename)
+        # Current values are (display_name, wav_filename, transcript_filename, summary_filename)
         # Let's assume the Treeview columns are: ("Meeting Date/ID", "WAV File", "Transcript File", "Summary File")
         # This means the initial Treeview setup needs to be: 
         # self.history_tree = ttk.Treeview(history_frame, columns=("datetime", "wav", "transcript", "summary"), show="headings")
@@ -459,11 +492,24 @@ class SettingsWindow(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.title("设置")
-        self.geometry("500x350") # Increased width for model dir
+        # self.geometry("500x350") # Increased width for model dir
         self.app_controller = app_controller 
         self.settings_manager = settings_manager
         self.llm_summarizer = llm_summarizer
         self.transcriber = transcriber
+
+        # Configure window size
+        window_width = 500
+        window_height = 350
+        self.geometry(f"{window_width}x{window_height}")
+
+        # Center the window
+        self.update_idletasks() # Ensure window dimensions are up-to-date
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        x_coordinate = int((screen_width / 2) - (window_width / 2))
+        y_coordinate = int((screen_height / 2) - (window_height / 2))
+        self.geometry(f"{window_width}x{window_height}+{x_coordinate}+{y_coordinate}")
 
         tk.Label(self, text="OpenAI API Key:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
         self.api_key_entry = ttk.Entry(self, width=50)
@@ -547,8 +593,21 @@ class PreviewWindow(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.title(title)
-        self.geometry("700x500") # Wider for better readability
+        # self.geometry("700x500") # Wider for better readability
         
+        # Configure window size
+        window_width = 700
+        window_height = 500
+        self.geometry(f"{window_width}x{window_height}")
+
+        # Center the window
+        self.update_idletasks() # Ensure window dimensions are up-to-date
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        x_coordinate = int((screen_width / 2) - (window_width / 2))
+        y_coordinate = int((screen_height / 2) - (window_height / 2))
+        self.geometry(f"{window_width}x{window_height}+{x_coordinate}+{y_coordinate}")
+
         # Use ScrolledText for better handling of long content and potential Markdown
         text_area = scrolledtext.ScrolledText(self, wrap=tk.WORD, padx=10, pady=10, relief=tk.FLAT)
         text_area.pack(fill=tk.BOTH, expand=True)

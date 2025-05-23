@@ -10,7 +10,7 @@ class AudioRecorder:
     def __init__(self, temp_filename="recordings/temp_combined_audio.wav"):
         self.temp_filename = temp_filename # Temporary file for the combined (mic+system) audio
         self.final_saved_filename = None # To store the path of the uniquely named final audio file
-        self.samplerate = 44100  # Standard sample rate
+        self.samplerate = 16000  # Standard sample rate
         self.channels_output = 2 # Default stereo for system audio, but will be adjusted based on device capabilities
         
         self.is_recording = False
